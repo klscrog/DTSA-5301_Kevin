@@ -1,0 +1,250 @@
+---
+title: "Reproducible Report on COVID19 Data Final Project 2"
+author: "Kevin Scroggins"
+date: "2025-07-05"
+output: 
+  pdf_document: default
+  html_document: default
+---
+# Introduction
+Throughout this project, I will look at reported numbers of the Covid-19 Pandemic from 2020-2023. The data is from John Hopkins University and can be found here <https://github.com/CSSEGISandData/COVID-19>. The first goal is to create visualizations to help understand the data as whole. After looking at the data, the second goal is to create a model to better understand an aspect of the data.
+
+### Setup
+The setup imports used libraries.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+
+## Importing Data
+
+Note: This section is based on the  Professor Wall's Lectures.
+
+The data must be imported, this was done by importing and reading the CSVs. The data itself always a potential source of bias. While it was out of our control what data we were working with, it is worth while to ensure integrity of the data. Potential sources of bias here include where the samples come from, how the data is recorded, and any bias from the observer. The data includes potentially useful variables such as Province/State, Country/Region, date, number of cases, number of deaths, and Population size.
+
+```{r import_data}
+
+file_names <- c("time_series_covid19_confirmed_US.csv",  "time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_US.csv",  "time_series_covid19_deaths_global.csv")
+
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+urls <- str_c(url_in, file_names)
+
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+US_cases <- read_csv(urls[1])
+US_deaths <- read_csv(urls[3])
+
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_lookup_url)
+```
+## Tidying global data
+Note: Note: This is almost exactly the same as done by Professor Wall in Lectures.
+The goal was to combine the global cases and deaths into one usable table, and focus on interesting variables.
+```{r data_cleaning_global}
+
+global_cases <- global_cases %>%
+  pivot_longer(
+    cols = matches("^\\d{1,2}/\\d{1,2}/\\d{2}$"),  
+    names_to = "date",
+    values_to = "cases"
+  ) %>%
+  mutate(date = as.Date(date, format = "%m/%d/%y")) %>%
+  select(-c(Lat, Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "death") %>%
+  mutate(date = as.Date(date, format = "%m/%d/%y")) %>%
+  select(-Lat, -Long)
+
+global <- global_cases %>%
+  full_join(global_deaths) 
+
+global <- global %>% filter(cases > 0) %>%
+  unite("Combined_Key",
+        c(`Province/State`, `Country/Region`),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE) %>%
+  rename("Province_State" = `Province/State`, "Country_Region" = `Country/Region`)
+
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date, cases, death, Population, Combined_Key.y) %>%
+  rename("Combined_Key" = Combined_Key.y)
+
+summary(global)
+```
+
+## Tidying US data
+Note: This is almost exactly the same as done by Professor Wall in Lectures.
+The goal was to combine the US cases and deaths into one usable table, and focus on interesting variables.
+```{r data_cleaning_US}
+
+US_cases <- US_cases %>% 
+  pivot_longer(cols = -(UID:Combined_Key),
+                          names_to = "date",
+                          values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>% 
+  pivot_longer(cols = -(UID:Population),
+                          names_to = "date",
+                          values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US <- US_cases %>%
+  full_join(US_deaths) %>%
+  select(Admin2, Province_State, Country_Region, Combined_Key,
+         date, cases, Population, deaths) %>% 
+  rename("County" = Admin2)
+
+summary(US)
+```
+
+## Visualizing Data for US
+Note: The data grouping and first visualization were taken from lecture by Professor Wall. 
+The goal was to group cases and deaths into usable groups as well as look at deaths per capita.
+```{r US_by_state}
+
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date,
+         cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US", y = NULL)
+
+
+```
+This visualization was shown in the lecture. It uses a logarithmic scale to show the  number of cases and deaths in the United States. One source of bias is the logarithmic scale that was used. This scale helps visualize the dramatic rise in cases and deaths early on in the pandemic, and helps put both the deaths and cases in scale. However, it could cause bias in a viewer because it looks flat from 2021.
+
+```{r visualization_1.5}
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US", y = NULL)
+```
+
+This is the linear scale version of the same plot. This would remove the potential bias of a flat growth of the cases. We can see that the cases continue to rise well past 2021. However, this removes the sense of scale for the deaths. It could cause and observer to think that the number of deaths was much smaller than it really was.
+
+```{r visualization_2}
+
+latest_date <- max(US_by_state$date)
+
+top_5_states <- US_by_state %>%
+  filter(date == latest_date) %>%
+  arrange(desc(deaths)) %>%
+  slice_head(n = 5)
+ggplot(top_5_states, aes(x = reorder(Province_State, deaths), y = deaths)) +
+  geom_col(fill = "red") +
+  coord_flip() +
+  labs(
+    title = paste("Top 5 States by COVID Deaths as of", latest_date),
+    x = "State",
+    y = "Total Deaths"
+  ) 
+```
+
+```{r visualization_3}
+US_by_state %>%
+  filter(date == latest_date) %>%
+  arrange(desc(deaths_per_mill)) %>%
+  slice(2:6) %>%
+  ggplot(aes(x = reorder(Province_State, deaths_per_mill), y = deaths_per_mill)) +
+  geom_col(fill = "orange") +
+  coord_flip() +
+  labs(
+    title = paste("Top 5 States by COVID Deaths per Million (as of", latest_date, ")"),
+    x = "State",
+    y = "Deaths per Million"
+  )
+```
+
+
+I created two visualizations to show the states that had the most Covid deaths, as well as the states with the highest deaths per million. This is an example of how data analysis must take care to analyze and plot data effectively. If only the total deaths were looked at, we get a much different answer than by looking at the per capita deaths of states. This could cause bias when looking at which states handled the pandemic effectively. While both of these visualizations are truthful, they can be used to tell different stories.
+
+```{r model}
+
+global_by_day <- global %>%
+  group_by(date) %>%
+  summarize(
+    total_cases = sum(cases, na.rm = TRUE),
+    total_deaths = sum(death, na.rm = TRUE),
+    total_population = sum(Population, na.rm = TRUE), 
+    .groups = "drop"
+  ) %>%
+  mutate(
+    cases_per_100k = total_cases / total_population * 100000,
+    deaths_per_100k = total_deaths / total_population * 100000
+  )
+
+mod <- lm(deaths_per_100k ~ cases_per_100k, data = global_by_day)
+summary(mod)
+global_by_day <- global_by_day %>%
+  mutate(pred = predict(mod, newdata = global_by_day))
+
+
+ggplot(global_by_day, aes(x = cases_per_100k)) +
+  geom_point(aes(y = deaths_per_100k, color = "Actual"), alpha = 0.6) +
+  geom_line(aes(y = pred, color = "Prediction"), size = 1) +
+  labs(
+    title = "Global Daily COVID: Deaths vs Cases per 100k",
+    x = "Cases per 100,000",
+    y = "Deaths per 100,000",
+    color = "Legend"
+  ) +
+  scale_color_manual(values = c("Actual" = "blue", "Prediction" = "red")) +
+  theme_minimal()
+```
+Similar to the lecture, I made a linear regression to compare the cases per capita vs deaths per capita. I used the global statistics for this comparison, so the data was per 100,000 people. It is looking at a singular global point across the plot. The very small p-value means that this regression is statistically significant.  The relatively high R-squared of 0.88 means that the trend is relavent and deaths do follow cases well.
+
+We can see that the actual deaths vary from the cases throughout the time period.  It would be interesting to look at how other factors affect this, such as hospital capacity and vaccination rates, and see if the correlates with either the higher or lower than expected death rates.
+
+## Conclusion
+This markdown file shows an initial look into the Covid 19 dataset from John Hopkins. Throughout this analysis, I discussed potential sources of bias. Bias could come from the data itself, or be caused by interpretations of the visualizations. While the goal is to make visualizations as clear as possible, it can be difficult to remove all bias. I showed how data can be plotted on different scales, each way with its own strengths and weaknesses. I also showed that using the right analysis is key, as the same data can tell different stories.
+
+The model I used could be the start of future research. A potential area for future research would be to see what factors influenced the Covid death rates as opposed to the expectation from the number of cases.
+
+### My Session Info
+```{r my_session_info}
+sessionInfo()
+```
